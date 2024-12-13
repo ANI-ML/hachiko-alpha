@@ -77,8 +77,8 @@ def process_pdf(uploaded_files, query):
 def main():
 
     # Initialize components
-    # init_memory_log()
-    # tracker = OutputTracker()
+    init_memory_log()
+    tracker = OutputTracker()
     st.image("./company_logo.webp", width=300)
     # Initialize session state
     if 'summary' not in st.session_state:
@@ -105,7 +105,7 @@ def main():
 
     col1, col2 = st.columns([2, 1])
     with col1:
-        st.title("Hachiko Alpha v1.1")
+        st.title("Hachiko Alpha v1.2")
         
     with col2:
         st.markdown("")  
@@ -172,10 +172,10 @@ def main():
                     'success': True
                 }
 
-                # # Log the run
-                # run_info = tracker.log_run(uploaded_files, summary, metrics)
-                # if run_info:
-                #     st.success(f"✨ Summary generated successfully! (Run ID: {run_info['run_id']})")
+                # Log the run
+                run_info = tracker.log_run(uploaded_files, summary, metrics)
+                if run_info:
+                    st.success(f"✨ Summary generated successfully! (Run ID: {run_info['run_id']})")
 
                 # Display processing time
                 timer_placeholder.info(f"⏱️ Processing time: {time_display}")

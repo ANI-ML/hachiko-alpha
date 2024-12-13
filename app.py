@@ -21,7 +21,7 @@ from langchain.callbacks.manager import CallbackManager
 
 env_path = Path(__file__).parent / '.env'
 load_dotenv(env_path)
-
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # Initialize Langsmith client
 langsmith_client = Client()
 tracer = LangChainTracer(
@@ -31,7 +31,6 @@ tracer = LangChainTracer(
 def process_pdf(uploaded_files, query):
     # Create callback manager for tracing
     callback_manager = CallbackManager([tracer])
-
     # Reset timestamp at the start of each run
     reset_run_timestamp()
 
@@ -39,6 +38,7 @@ def process_pdf(uploaded_files, query):
     filepaths = []
     results = None
     graph = create_graph(callback_manager=callback_manager)
+
     for uploaded_file in uploaded_files:
         with NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
@@ -77,8 +77,8 @@ def process_pdf(uploaded_files, query):
 def main():
 
     # Initialize components
-    init_memory_log()
-    tracker = OutputTracker()
+    # init_memory_log()
+    # tracker = OutputTracker()
     st.image("./company_logo.webp", width=300)
     # Initialize session state
     if 'summary' not in st.session_state:
@@ -98,6 +98,7 @@ def main():
         st.markdown("### Document Guidelines")
         st.warning("""
         - PDF files only
+        - All pages of pdf are oriented properly
         - Maximum 10 files at once
         - Each file < 10MB
         """)
@@ -171,10 +172,10 @@ def main():
                     'success': True
                 }
 
-                # Log the run
-                run_info = tracker.log_run(uploaded_files, summary, metrics)
-                if run_info:
-                    st.success(f"✨ Summary generated successfully! (Run ID: {run_info['run_id']})")
+                # # Log the run
+                # run_info = tracker.log_run(uploaded_files, summary, metrics)
+                # if run_info:
+                #     st.success(f"✨ Summary generated successfully! (Run ID: {run_info['run_id']})")
 
                 # Display processing time
                 timer_placeholder.info(f"⏱️ Processing time: {time_display}")

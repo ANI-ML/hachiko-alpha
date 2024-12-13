@@ -3,14 +3,18 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Union
 from functools import lru_cache
-
+from PIL import Image
+import io
+import base64
 from sentence_transformers import CrossEncoder
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import HumanMessage
+import anthropic
 
 env_path = Path(__file__).parent / '.env'
 load_dotenv(env_path)
@@ -28,6 +32,151 @@ class QueryDecomposer(BaseModel):
 def get_reranker():
     """Cached initialization of the CrossEncoder to prevent reloading."""
     return CrossEncoder('cross-encoder/ms-marco-MiniLM-L-12-v2')
+
+class VisualProcessor:
+    """Handles processing of images and PDFs"""
+    
+    def __init__(self, api_key: str):
+        self.client = anthropic.Anthropic(api_key=api_key)
+        self.llm = ChatAnthropic(
+            model='claude-3-5-sonnet-20241022',
+            anthropic_api_key=api_key,
+            temperature=0,
+            top_p=0.7
+        )
+    
+    def encode_image(self, image: Union[str, Path, Image.Image]) -> tuple:
+        """
+        Encode image to base64 and determine media type.
+        Accepts file paths, PIL Images, or bytes.
+        """
+        if isinstance(image, (str, Path)):
+            image = Image.open(image)
+            
+        if isinstance(image, Image.Image):
+            # Convert to RGB if needed
+            if image.mode not in ('RGB', 'L'):
+                image = image.convert('RGB')
+                
+            # Convert to bytes using JPEG format
+            img_byte_arr = io.BytesIO()
+            image.save(img_byte_arr, format='JPEG', quality=95)
+            img_byte_arr = img_byte_arr.getvalue()
+            
+            # Use explicit media type for JPEG
+            media_type = 'image/jpeg'
+            
+            # Encode to base64
+            img_base64 = base64.b64encode(img_byte_arr).decode('utf-8')
+            
+            return img_base64, media_type
+        else:
+            raise ValueError(f"Unsupported image type: {type(image)}")
+
+
+    def process_single_image(self, image: Union[str, Path, Image.Image], prompt: str) -> str:
+        """Process a single image """
+        img_base64, media_type = self.encode_image(image)
+        
+        message = self.client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1024,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": img_base64,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": prompt
+                    }
+                ],
+            }]
+        )
+        
+        return message.content[0].text
+
+    def process_multiple_images(self, images: List[Union[str, Path, Image.Image]], prompt: str) -> str:
+        """Process multiple images with """
+        content = []
+        
+        for image in images:
+            img_base64, media_type = self.encode_image(image)
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": img_base64,
+                }
+            })
+            
+        # Add the prompt text
+        content.append({
+            "type": "text",
+            "text": prompt
+        })
+        
+        message = self.client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1024,
+            messages=[{
+                "role": "user",
+                "content": content
+            }]
+        )
+        
+        return message.content[0].text
+
+    def create_visual_chain(self, system_prompt: str = None):
+        """Create a LangChain chain for image processing"""
+        def process_input(inputs):
+            if isinstance(inputs.get('image'), list):
+                return self.process_multiple_images(
+                    inputs['image'], 
+                    inputs.get('prompt', "Analyze these medical images. Don't leave out any details.")
+                )
+            else:
+                return self.process_single_image(
+                    inputs['image'],
+                    inputs.get('prompt', "Analyze this medical image. Don't leave out any details.")
+                )
+        
+        from langchain.chains import LLMChain
+        from langchain_core.runnables import RunnableLambda
+        
+        return RunnableLambda(process_input)
+
+def create_medical_visual_processor(api_key=os.getenv('ANTHROPIC_API_KEY')):
+    """Factory function to create a medical-focused visual processor"""
+    processor = VisualProcessor(api_key)
+    
+    # Create chain with medical-specific prompt
+    medical_prompt = """
+    Analyze this medical document image with focus on:
+    1. Patient information
+    2. Diagnoses
+    3. Test results
+    4. Medications
+    5. Treatment plans
+    
+    Be precise and comprehensive in extracting medical information. Do not leave out any details.
+    """
+    
+    chain = processor.create_visual_chain(system_prompt=medical_prompt)
+    return processor, chain
+    
+
+def summarize_image(image):
+    """Create a summary of the image content."""
+    _, visual_chain = create_medical_visual_processor()
+    return visual_chain.invoke({"image": image, "prompt": "Summarize the text from this medical document image. Be comprehensive and precise."})
 
 def create_summary_chain(callback_manager = None):
     summary_llm = ChatAnthropic(

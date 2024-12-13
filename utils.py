@@ -12,9 +12,18 @@ import json
 from graph import create_graph
 from memory_utils import get_memory_log
 
+import time
+from functools import wraps
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+import anthropic
+import openai
+import logging
+
 
 env_path = Path(__file__).parent / '.env'
 load_dotenv(env_path)
+
+
 
 class OutputTracker:
     def __init__(self):
@@ -83,7 +92,7 @@ class OutputTracker:
             # Create metadata
             metadata = {
                 'timestamp': timestamp,
-                'model_version': 'v1.1',
+                'model_version': 'v1.2',
                 'processing_time': performance_metrics.get('processing_time'),
                 'input_filename': [file.name for file in uploaded_files],
                 'number_of_files': len(uploaded_files),
@@ -210,6 +219,39 @@ class OutputTracker:
         except Exception as e:
              print(f"Error updating performance log: {str(e)}")
  
+def api_retry(
+    max_attempts: int = 3,
+    min_wait: float = 1,
+    max_wait: float = 10,
+    exponential_base: float = 2
+):
+    """
+    Decorator for retrying API calls with exponential backoff.
+    
+    Args:
+        max_attempts: Maximum number of retry attempts
+        min_wait: Minimum wait time between retries in seconds
+        max_wait: Maximum wait time between retries in seconds
+        exponential_base: Base for exponential backoff
+    """
+    return retry(
+        stop=stop_after_attempt(max_attempts),
+        wait=wait_exponential(multiplier=min_wait, max=max_wait, exp_base=exponential_base),
+        retry=retry_if_exception_type((
+            anthropic.APIError,
+            anthropic.APIConnectionError,
+            anthropic.RateLimitError,
+            openai.APIError,
+            openai.APIConnectionError,
+            openai.RateLimitError
+        )),
+        before_sleep=lambda retry_state: logger.warning(
+            f"Attempt {retry_state.attempt_number} failed. Retrying in {retry_state.next_action.sleep} seconds..."
+        ),
+        after=lambda retry_state: logger.info(
+            f"Call succeeded on attempt {retry_state.attempt_number}"
+        ) if retry_state.attempt_number > 1 else None
+    )
 
 # try:
 #     tracker = OutputTracker()

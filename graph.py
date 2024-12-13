@@ -2,7 +2,8 @@
 import os
 from dotenv import load_dotenv
 from pathlib import Path
-
+from PIL import Image
+from pdf2image import convert_from_path
 from typing_extensions import TypedDict
 from typing import List
 import pdfplumber
@@ -16,7 +17,7 @@ from langchain_experimental.text_splitter import SemanticChunker
 from langchain_openai import OpenAIEmbeddings
 from langgraph.graph import StateGraph, START, END
 from memory_utils import monitor_memory
-from agent import create_summary_chain, create_grade_chain, create_decomposition_chain, rerank_docs, hyde_expansion
+from agent import create_summary_chain, create_grade_chain, create_decomposition_chain, rerank_docs, hyde_expansion, summarize_image
 
 env_path = Path(__file__).parent / '.env'
 load_dotenv(env_path)
@@ -61,6 +62,7 @@ def create_graph(callback_manager=None):
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
+
 # Nodes
 def extract(state):
     monitor_memory("extract_start", state)
@@ -70,11 +72,24 @@ def extract(state):
     embedding_model = OpenAIEmbeddings(openai_api_key=os.getenv('OPENAI_API_KEY'))
     texts = []
 
-    for i,filepath in enumerate(filepath_list):
+    for i, filepath in enumerate(filepath_list):
         with pdfplumber.open(filepath) as pdf:
             text = ''
-            for page in pdf.pages:
-                text += page.extract_text()
+            for page_number, page in enumerate(pdf.pages):
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text
+                else:
+                    # If no text is extracted, use OCR
+                    print(f"Page {page_number + 1} of {filepath} requires OCR")
+                    images = convert_from_path(filepath, first_page=page_number + 1, last_page=page_number + 1)
+                    page_content = []
+                    for image in images:
+                        ocr_text = summarize_image(image)
+                        print(ocr_text)
+                        page_content.append(ocr_text)
+                    text += "\n".join(page_content)
+
             texts.append(text)
             monitor_memory(f"pdf_load_{i}", state)
 
@@ -95,6 +110,7 @@ def index(state):
     print("---INDEXING---")
 
     docs = state['docs']
+
     embedding_model = OpenAIEmbeddings(openai_api_key=os.getenv('OPENAI_API_KEY'))
     monitor_memory("pre_vectorstore", state)
     try:
@@ -154,9 +170,6 @@ def retrieve(state):
         gc.collect()
         monitor_memory("post_query_decomposition", state)
 
-        unique_docs = []
-        seen_docs = set()
-
         for i, query in enumerate(queries):
             expanded_query = hyde_expansion(query)
             relevant_docs = hybrid_retriever.invoke(expanded_query)
@@ -187,8 +200,6 @@ def retrieve(state):
     finally:
        # Clean up large objects
        del current_relevant_docs
-       del unique_docs
-       del seen_docs
        gc.collect()
 
 
